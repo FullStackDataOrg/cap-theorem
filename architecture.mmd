@@ -1,0 +1,53 @@
+flowchart LR
+
+    subgraph GEN["Data Generation"]
+        G["generate.py\nseed 42 → baseline\nseed 99 → partition"]
+    end
+
+    subgraph SETUP["Setup"]
+        S["setup.py\ncreate payment_events\non both nodes"]
+    end
+
+    subgraph SIM["Simulation — simulate_partition.py"]
+        direction TB
+        P1["Phase 1 — Baseline\n50 events → both nodes\nwritten_to = 'both'"]
+        P2["Phase 2 — Partition\ndocker pause node2\n30 events → node1 only\nwritten_to = 'node1_only'"]
+        P3["Phase 3 — Restore\ndocker unpause node2\nno auto-sync"]
+        P4["Phase 4 — Divergence Report\nrow count gap visible"]
+        P1 --> P2 --> P3 --> P4
+    end
+
+    subgraph INFRA["Infrastructure"]
+        N1[("Node 1\npostgres:15\nport 5432\n80 rows after sim")]
+        N2[("Node 2\npostgres:15\nport 5433\n50 rows after sim\nGAP = 30")]
+    end
+
+    subgraph OBS["Observation — observe_divergence.py"]
+        C1["Check 1\nMacro row counts"]
+        C2["Check 2\nMissing rows on node2"]
+        C3["Check 3\nShared row agreement"]
+        C4["Check 4\nWrite timeline\npartition boundary"]
+    end
+
+    subgraph REPAIR["Repair — repair.py"]
+        LWW["Strategy 1\nLast-Write-Wins\nCopy node1_only → node2\nData lost: 0"]
+        FWW["Strategy 2\nFirst-Write-Wins\nDelete node1_only from node1\nData lost: 30 rows"]
+    end
+
+    subgraph LOGS["Artefacts — data/"]
+        L1["simulation_log.json\nphase timings + gap"]
+        L2["repair_log.json\nstrategy outcomes"]
+    end
+
+    GEN --> SETUP
+    SETUP --> N1
+    SETUP --> N2
+    SIM --> N1
+    SIM -.->|"paused during Phase 2"| N2
+    N1 --> OBS
+    N2 --> OBS
+    OBS --> REPAIR
+    REPAIR -->|"sync forward"| N2
+    REPAIR -->|"roll back"| N1
+    SIM --> L1
+    REPAIR --> L2
